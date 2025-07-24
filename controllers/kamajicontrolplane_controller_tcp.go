@@ -12,6 +12,8 @@ import (
 	kamajiv1alpha1 "github.com/clastix/kamaji/api/v1alpha1"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -43,6 +45,20 @@ func (r *KamajiControlPlaneReconciler) createOrUpdateTenantControlPlane(ctx cont
 		}
 
 		_, scopeErr := controllerutil.CreateOrUpdate(ctx, k8sClient, tcp, func() error {
+			// Preserve dataStoreUsername if it exists in the current object
+			// This is needed because Kamaji auto-generates this field but it's not in the Go types
+			var preservedUsername string
+			unstructuredTCP := &unstructured.Unstructured{}
+			unstructuredContent, err := runtime.DefaultUnstructuredConverter.ToUnstructured(tcp)
+			if err == nil {
+				unstructuredTCP.Object = unstructuredContent
+				if spec, ok := unstructuredTCP.Object["spec"].(map[string]interface{}); ok {
+					if username, ok := spec["dataStoreUsername"].(string); ok && username != "" {
+						preservedUsername = username
+					}
+				}
+			}
+
 			if tcp.Annotations == nil {
 				tcp.Annotations = make(map[string]string)
 			}
@@ -203,6 +219,20 @@ func (r *KamajiControlPlaneReconciler) createOrUpdateTenantControlPlane(ctx cont
 			tcp.Spec.ControlPlane.Deployment.AdditionalInitContainers = kcp.Spec.Deployment.ExtraInitContainers
 			tcp.Spec.ControlPlane.Deployment.AdditionalContainers = kcp.Spec.Deployment.ExtraContainers
 			tcp.Spec.ControlPlane.Deployment.AdditionalVolumes = kcp.Spec.Deployment.ExtraVolumes
+
+			// Restore preserved dataStoreUsername if it existed
+			// This prevents the "unsetting the dataStoreUsername is not supported" error
+			if preservedUsername != "" {
+				// Convert back to unstructured to set the field
+				unstructuredContent, err := runtime.DefaultUnstructuredConverter.ToUnstructured(tcp)
+				if err == nil {
+					if spec, ok := unstructuredContent["spec"].(map[string]interface{}); ok {
+						spec["dataStoreUsername"] = preservedUsername
+						// Convert back to typed object
+						runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredContent, tcp)
+					}
+				}
+			}
 
 			if !isDelegatedExternally {
 				return controllerutil.SetControllerReference(&kcp, tcp, k8sClient.Scheme())
