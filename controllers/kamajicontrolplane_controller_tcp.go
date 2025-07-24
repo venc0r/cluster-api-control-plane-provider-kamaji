@@ -121,6 +121,14 @@ func (r *KamajiControlPlaneReconciler) createOrUpdateTenantControlPlane(ctx cont
 			if kcp.Spec.DataStoreSchema != "" {
 				tcp.Spec.DataStoreSchema = kcp.Spec.DataStoreSchema
 			}
+
+			// Always set dataStoreUsername to match what Kamaji expects
+			// This prevents Kamaji from auto-generating it and then complaining when we don't preserve it
+			if preservedUsername == "" {
+				// Use the same pattern as Kamaji: namespace_name
+				// This is needed even when dataStoreSchema is not explicitly set
+				preservedUsername = fmt.Sprintf("%s_%s", tcp.Namespace, tcp.Name)
+			}
 			tcp.Spec.Kubernetes.AdmissionControllers = kcp.Spec.AdmissionControllers
 			tcp.Spec.ControlPlane.Deployment.RegistrySettings.Registry = kcp.Spec.ContainerRegistry
 			// Volume mounts
